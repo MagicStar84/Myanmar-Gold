@@ -5,66 +5,75 @@ import plotly.graph_objects as go
 from datetime import datetime
 import pytz
 
-# ─────────────────────────────────────────────
-#  PAGE CONFIG & CSS (အစ်ကို့မူရင်းအတိုင်း ထားရှိပါသည်)
-# ─────────────────────────────────────────────
+# 1. PAGE CONFIG
 st.set_page_config(
     page_title="မြန်မာ ရွှေဈေး ခွဲခြမ်းစိတ်ဖြာမှု",
     page_icon="🥇",
     layout="wide",
 )
 
-# ... (အစ်ကို့ CSS code တွေ ဒီနေရာမှာ ရှိမယ်၊ နေရာလွတ်စေရန် ချန်လှပ်ထားပါသည်) ...
-# (အောက်က Helper Functions အပိုင်းမှာ အဓိက ပြင်ဆင်ထားပါတယ်)
-
-# ─────────────────────────────────────────────
-#  UPDATED HELPER FUNCTIONS (FIXED ERROR)
-# ─────────────────────────────────────────────
-
-@st.cache_resource(ttl=300)  # Serialization Error အတွက် cache_resource ကို သုံးသည်
+# 2. DATA FETCHING FUNCTION (ERROR FIXED)
+@st.cache_resource(ttl=300)
 def fetch_gold_data():
-    """Fetch live + historical gold data from Yahoo Finance with error handling."""
     try:
         ticker = yf.Ticker("GC=F")
-        # ဒေတာဆွဲယူခြင်း
+        # ခြောက်လစာ ဒေတာယူမယ်
         hist = ticker.history(period="6mo", interval="1d")
         
         if hist.empty:
             return None, None
             
-        # yfinance ရဲ့ Multi-index issue ကို ရှင်းရန် column အမည်များကို clean လုပ်ခြင်း
-        hist.columns = [col[0] if isinstance(col, tuple) else col for col in hist.columns]
-        
-        # ဒေတာကို sorting ပြန်လုပ်ပြီး index ကို datetime အဖြစ် သေချာအောင်လုပ်ခြင်း
+        # Multi-index header ပြဿနာကို ရှင်းထုတ်ခြင်း
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = hist.columns.get_level_values(0)
+            
         hist.index = pd.to_datetime(hist.index)
         
-        # Fast Info (Price) ယူခြင်း
-        info = ticker.fast_info
-        current_price = info['last_price'] if 'last_price' in info else hist['Close'].iloc[-1]
+        # Live Price ယူခြင်း
+        current_price = hist['Close'].iloc[-1]
         
         return hist, current_price
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
         return None, None
 
-def calc_myanmar_gold(gold_usd: float, usd_rate: float) -> float:
-    """((Gold_Price * 1.029) * USD_Rate) / 0.576"""
-    return ((gold_usd * 1.029) * usd_rate) / 0.576
+# 3. SIDEBAR SETUP
+with st.sidebar:
+    st.title("🥇 ရွှေဈေးတွက်ချက်မှု")
+    cbm_rate = st.number_input("ဗဟိုဘဏ်ဈေး (ကျပ်)", value=2100.0)
+    market_rate = st.number_input("ပြင်ပပေါက်ဈေး (ကျပ်)", value=4500.0)
+    rate_choice = st.radio("ဈေးနှုန်းရွေးချယ်ပါ", ["ဗဟိုဘဏ်နှုန်း", "ပြင်ပပေါက်ဈေး"])
+    
+    selected_rate = cbm_rate if rate_choice == "ဗဟိုဘဏ်နှုန်း" else market_rate
 
-# ... (smc_analysis function နှင့် အခြား UI code များ အစ်ကို့မူရင်းအတိုင်း ဆက်ရှိပါမည်) ...
+# 4. MAIN LOGIC
+hist, gold_price = fetch_gold_data()
 
-# ─────────────────────────────────────────────
-#  MAIN CONTENT (FIXED DATA LOADING)
-# ─────────────────────────────────────────────
+if hist is not None:
+    # မြန်မာရွှေဈေး တွက်နည်း
+    mm_gold_price = ((gold_price * 1.029) * selected_rate) / 0.576
+    
+    # UI Display
+    st.header(f"🇲🇲 မြန်မာ့ရွှေဈေး: {mm_gold_price:,.0f} ကျပ်")
+    
+    col1, col2 = st.columns(2)
+    col1.metric("ကမ္ဘာ့ရွှေဈေး (USD)", f"${gold_price:,.2f}")
+    col2.metric("အသုံးပြုသည့် ဒေါ်လာဈေး", f"{selected_rate:,.0f} MMK")
 
-# Fetch data using updated logic
-with st.spinner("ရွှေဈေးနှုန်း ဆွဲနေသည်..."):
-    hist, live_gold_price = fetch_gold_data()
-    data_ok = hist is not None and not hist.empty
+    # 5. CHART
+    fig = go.Figure(data=[go.Candlestick(x=hist.index,
+                open=hist['Open'], high=hist['High'],
+                low=hist['Low'], close=hist['Close'])])
+    fig.update_layout(title="Gold Price Chart (6 Months)", template="plotly_dark")
+    st.plotly_chart(fig, use_container_width=True)
 
-if not data_ok:
-    st.warning("ဈေးနှုန်းဒေတာ မရရှိပါ။ Internet ချိတ်ဆက်မှု သို့မဟုတ် API Limit ကို စစ်ဆေးပါ။")
-    st.stop()
-
-# ကျန်တဲ့ UI code တွေကို အစ်ကို့မူရင်းအတိုင်း ဆက်သုံးနိုင်ပါတယ်
-# gold_price နေရာမှာ live_gold_price ကို အသုံးပြုထားပါသည်
+    # 6. SMC ANALYSIS (SIMPLE VERSION)
+    st.subheader("🧠 SMC Analysis (တစ်နေ့တာ)")
+    last_close = hist['Close'].iloc[-1]
+    prev_close = hist['Close'].iloc[-2]
+    
+    if last_close > prev_close:
+        st.success("Trend: Bullish (ဈေးတက်ရန် အလားအလာရှိသည်)")
+    else:
+        st.error("Trend: Bearish (ဈေးပြန်ကျနိုင်သည်)")
+else:
+    st.error("ဒေတာဆွဲယူ၍ မရပါ။ Internet Connection ကို စစ်ဆေးပြီး Refresh လုပ်ပေးပါ။")
